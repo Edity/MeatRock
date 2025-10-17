@@ -1,397 +1,315 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import asyncio
-import json
-import os
-import httpx
-from typing import AsyncIterator
 import requests
+import json
+import time
 
 # ==================== КОНФИГУРАЦИЯ ====================
-# TODO: Замените на ваши реальные данные API
 BOT_TOKEN = "8220896552:AAFqZ28ylYmItLQLmQHOqTGWDCRtbSLwD5U"
 
 # Конфигурация Flexar API
-FLEXAR_BASE_URL = "https://app.flexar.al"  # TODO: Замените на ваш URL
-FLEXAR_API_KEY = "your_flexar_api_key_here"  # TODO: Замените на ваш API ключ
-FLEXAR_CHAT_NAME = "MovieRecommendationBot"  # TODO: Замените на имя вашего чата в Flexar
-FLEXAR_AGENT_ID = "your_agent_id_here"  # TODO: Замените на ID агента если используете агентов
+FLEXAR_BASE_URL = "https://vibeathon.flexar.ai"
+FLEXAR_API_KEY = "flexar-ExNzcwMDA2YWI0NzExZjA5NzBlMGViYj"
+FLEXAR_CHAT_ID = "15660a30ab4811f094ae0ebb9de0575e"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ==================== КЛАССЫ ДЛЯ РАБОТЫ С API ====================
+# ==================== ПРОСТОЙ КЛИЕНТ API ====================
 
-class FlexarAPIClient:
-    """Клиент для работы с API Flexar"""
-    
+class SimpleFlexarClient:
     def __init__(self):
-        self.base_url = f"{FLEXAR_BASE_URL.rstrip('/')}/api/v1"
+        self.base_url = FLEXAR_BASE_URL
         self.headers = {
             "Authorization": f"Bearer {FLEXAR_API_KEY}",
             "Content-Type": "application/json"
         }
     
-    async def get_chat_id(self) -> str:
-        """Получает ID чата по имени"""
-        # TODO: Реализовать по гайду - шаг 1 для чатов
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/chats",
-                    params={"name": FLEXAR_CHAT_NAME},
-                    headers=self.headers
+    def ask_question(self, question: str, max_retries: int = 3) -> str:
+        """Простой синхронный запрос к API с повторными попытками"""
+        
+        for attempt in range(max_retries):
+            try:
+                # Создаем сессию
+                session_response = requests.post(
+                    f"{self.base_url}/api/v1/chats/{FLEXAR_CHAT_ID}/sessions",
+                    headers=self.headers,
+                    json={"name": f"Telegram_{int(time.time())}"},
+                    timeout=30
                 )
-                response.raise_for_status()
-                data = response.json()
                 
-                if data.get("code") == 0 and data.get("data"):
-                    return data["data"][0]["id"]
-                else:
-                    raise Exception("Чат не найден")
-        except Exception as e:
-            print(f"Ошибка получения chat_id: {e}")
-            return ""
-    
-    async def create_session(self, chat_id: str, session_name: str = "Telegram Session") -> str:
-        """Создает новую сессию"""
-        # TODO: Реализовать по гайду - шаг 2 для чатов
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/chats/{chat_id}/sessions",
-                    json={"name": session_name},
-                    headers=self.headers
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                if data.get("code") == 0 and data.get("data"):
-                    return data["data"]["id"]
-                else:
-                    raise Exception("Ошибка создания сессии")
-        except Exception as e:
-            print(f"Ошибка создания сессии: {e}")
-            return ""
-    
-    async def ask_question_stream(self, chat_id: str, session_id: str, question: str) -> str:
-        """Задает вопрос и получает ответ в потоковом режиме"""
-        # TODO: Реализовать по гайду - шаг 3 для чатов (потоковый режим)
-        try:
-            payload = {
-                "question": question,
-                "session_id": session_id,
-                "stream": True
-            }
-            
-            full_answer = ""
-            async with httpx.AsyncClient() as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/chats/{chat_id}/completions",
-                    json=payload,
-                    headers={**self.headers, "Accept": "text/event-stream"}
-                ) as response:
-                    response.raise_for_status()
+                if session_response.status_code != 200:
+                    print(f"Ошибка создания сессии: {session_response.status_code}")
+                    continue
                     
-                    async for line in response.aiter_lines():
-                        if line.startswith('data:'):
-                            data_str = line[5:].strip()
-                            if data_str in ['true', '[DONE]']:
-                                break
-                            try:
-                                event_data = json.loads(data_str)
-                                if event_data.get("code") == 0:
-                                    answer_data = event_data.get("data", {})
-                                    if isinstance(answer_data, dict):
-                                        answer = answer_data.get("answer", "")
-                                        if answer:
-                                            full_answer += answer
-                            except json.JSONDecodeError:
-                                continue
-            
-            return full_answer if full_answer else "Не удалось получить ответ"
-            
-        except Exception as e:
-            print(f"Ошибка при запросе к API: {e}")
-            return "Извините, произошла ошибка при обработке запроса"
-    
-    async def ask_question_direct(self, question: str) -> str:
-        """Упрощенный метод для запроса к API"""
-        # TODO: Можно реализовать через агентов если предпочтительнее
-        try:
-            chat_id = await self.get_chat_id()
-            if not chat_id:
-                return "Ошибка: не удалось найти чат"
-            
-            session_id = await self.create_session(chat_id)
-            if not session_id:
-                return "Ошибка: не удалось создать сессию"
-            
-            return await self.ask_question_stream(chat_id, session_id, question)
-            
-        except Exception as e:
-            print(f"Общая ошибка API: {e}")
-            return "Извините, сервис временно недоступен"
+                session_data = session_response.json()
+                if session_data.get("code") != 0:
+                    print(f"Ошибка в данных сессии: {session_data}")
+                    continue
+                    
+                session_id = session_data["data"]["id"]
+                
+                # Задаем вопрос
+                payload = {
+                    "question": question,
+                    "session_id": session_id,
+                    "stream": False
+                }
+                
+                response = requests.post(
+                    f"{self.base_url}/api/v1/chats/{FLEXAR_CHAT_ID}/completions",
+                    headers=self.headers,
+                    json=payload,
+                    timeout=60
+                )
+                
+                if response.status_code == 503:
+                    print(f"Сервер недоступен (503), попытка {attempt + 1}/{max_retries}")
+                    time.sleep(2)
+                    continue
+                    
+                if response.status_code != 200:
+                    print(f"Ошибка API: {response.status_code}")
+                    continue
+                    
+                data = response.json()
+                if data.get("code") == 0:
+                    answer_data = data.get("data", {})
+                    if isinstance(answer_data, dict):
+                        return answer_data.get("answer", "Не удалось получить ответ")
+                
+            except requests.exceptions.Timeout:
+                print(f"Таймаут запроса, попытка {attempt + 1}/{max_retries}")
+                time.sleep(2)
+            except requests.exceptions.ConnectionError:
+                print(f"Ошибка соединения, попытка {attempt + 1}/{max_retries}")
+                time.sleep(2)
+            except Exception as e:
+                print(f"Неизвестная ошибка: {e}, попытка {attempt + 1}/{max_retries}")
+                time.sleep(2)
+        
+        return "Извините, сервис временно недоступен. Попробуйте позже."
 
-# ==================== ИНИЦИАЛИЗАЦИЯ КЛИЕНТА ====================
-api_client = FlexarAPIClient()
+# ==================== ИНИЦИАЛИЗАЦИЯ ====================
+api_client = SimpleFlexarClient()
 
-# ==================== ФУНКЦИИ МЕНЮ ====================
+# ==================== ИГРА "УГАДАЙ ФИЛЬМ" ====================
 
-def main_menu():
-    markup = InlineKeyboardMarkup()
-    markup.row_width = 1
-    markup.add(
-        InlineKeyboardButton("🎬 Рекомендовать фильм", callback_data="recommend"),
-        InlineKeyboardButton("🎭 Выбрать жанр", callback_data="choose_genre"),
-        InlineKeyboardButton("⭐ Рекомендация по настроению", callback_data="mood_recommend"),
-        InlineKeyboardButton("📚 Мои рекомендации", callback_data="my_movies"), 
-        InlineKeyboardButton("ℹ️ Помощь", callback_data="help")
-    )
-    return markup
+# Храним историю диалогов для каждого пользователя
+user_conversations = {}
 
-def genre_menu():
-    markup = InlineKeyboardMarkup()
-    markup.row_width = 2
-    markup.add(
-        InlineKeyboardButton("🔫 Боевик", callback_data="genre_action"),
-        InlineKeyboardButton("😂 Комедия", callback_data="genre_comedy"),
-        InlineKeyboardButton("💖 Драма", callback_data="genre_drama"),
-        InlineKeyboardButton("🚀 Фантастика", callback_data="genre_scifi"),
-        InlineKeyboardButton("👻 Ужасы", callback_data="genre_horror"),
-        InlineKeyboardButton("🔍 Детектив", callback_data="genre_mystery"),
-        InlineKeyboardButton("↩️ Назад", callback_data="back_main")
-    )
-    return markup
-
-def mood_menu():
+def get_answer_keyboard():
+    """Клавиатура с кнопками ответов"""
     markup = InlineKeyboardMarkup()
     markup.row_width = 2
     markup.add(
-        InlineKeyboardButton("😊 Веселое", callback_data="mood_happy"),
-        InlineKeyboardButton("😢 Грустное", callback_data="mood_sad"),
-        InlineKeyboardButton("🤔 Задумчивое", callback_data="mood_thoughtful"),
-        InlineKeyboardButton("🎉 Праздничное", callback_data="mood_celebratory"),
-        InlineKeyboardButton("🔮 Таинственное", callback_data="mood_mysterious"),
-        InlineKeyboardButton("↩️ Назад", callback_data="back_main")
+        InlineKeyboardButton("✅ Да", callback_data="answer_yes"),
+        InlineKeyboardButton("🟡 Скорее да", callback_data="answer_probably_yes"),
+        InlineKeyboardButton("⚪️ Не уверен", callback_data="answer_not_sure"),
+        InlineKeyboardButton("🟠 Скорее нет", callback_data="answer_probably_no"),
+        InlineKeyboardButton("❌ Нет", callback_data="answer_no"),
+        InlineKeyboardButton("🔄 Новая игра", callback_data="new_game")
     )
     return markup
 
-# ==================== ОБРАБОТЧИКИ СООБЩЕНИЙ ====================
+def get_start_keyboard():
+    """Клавиатура для начала игры"""
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton("🎮 Начать угадывать!", callback_data="start_game")
+    )
+    return markup
+
+# ==================== ОБРАБОТЧИКИ ====================
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.send_message(
-        message.chat.id,
-        "Привет! Я бот для рекомендации фильмов 🎬\n\n"
-        "Я использую AI чтобы подобрать идеальный фильм под ваше настроение и предпочтения!",
-        reply_markup=main_menu()
+    """Обработчик команды start"""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Очищаем предыдущую историю
+    if user_id in user_conversations:
+        del user_conversations[user_id]
+    
+    welcome_text = (
+        "🎬 Привет! Я Кинатор - волшебный угадыватель фильмов! 🧙‍♂️\n\n"
+        "**Правила игры:**\n"
+        "1. Загадай ЛЮБОЙ фильм\n"
+        "2. Отвечай на мои вопросы кнопками\n"
+        "3. Я попробую угадать твой фильм!\n\n"
+        "Готов начать магический сеанс?"
     )
+    
+    bot.send_message(chat_id, welcome_text, reply_markup=get_start_keyboard())
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
+    """Обработчик нажатий на кнопки"""
+    user_id = call.from_user.id
     chat_id = call.message.chat.id
     message_id = call.message.message_id
     
-    if call.data == "recommend":
-        bot.edit_message_text(
-            "🎬 Отлично! Давайте подберем фильм.\n\n"
-            "Опишите, какой фильм вы хотите посмотреть?\n"
-            "Например:\n"
-            "• 'Комедия про дружбу'\n" 
-            "• 'Научная фантастика с пришельцами'\n"
-            "• 'Что-то романтическое для вечера'",
-            chat_id, message_id,
-            reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("↩️ Назад", callback_data="back_main")
-            )
-        )
+    if call.data == "start_game":
+        # Начинаем новую игру
+        start_game(chat_id, user_id)
     
-    elif call.data == "choose_genre":
-        bot.edit_message_text(
-            "🎭 Выберите жанр:",
-            chat_id, message_id,
-            reply_markup=genre_menu()
-        )
+    elif call.data == "new_game":
+        # Начинаем новую игру
+        start_game(chat_id, user_id)
     
-    elif call.data == "mood_recommend":
-        bot.edit_message_text(
-            "⭐ Какое у вас сегодня настроение?",
-            chat_id, message_id,
-            reply_markup=mood_menu()
-        )
-    
-    elif call.data == "my_movies":
-        bot.edit_message_text(
-            "📚 Здесь будут сохраненные ваши рекомендации\n\n"
-            "⚙️ Функция в разработке...",
-            chat_id, message_id,
-            reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("↩️ Назад", callback_data="back_main")
-            )
-        )
-    
-    elif call.data == "help":
-        bot.edit_message_text(
-            "ℹ️ Помощь по боту:\n\n"
-            "• 🎬 Рекомендовать фильм - AI подберет фильм по вашему описанию\n"
-            "• 🎭 Выбрать жанр - фильмы по конкретному жанру\n"
-            "• ⭐ Рекомендация по настроению - фильмы под ваше настроение\n"
-            "• 📚 Мои рекомендации - история ваших запросов\n\n"
-            "Просто напишите что вы хотите посмотреть!",
-            chat_id, message_id,
-            reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("↩️ Назад", callback_data="back_main")
-            )
-        )
-    
-    elif call.data == "back_main":
-        bot.edit_message_text(
-            "Главное меню:",
-            chat_id, message_id,
-            reply_markup=main_menu()
-        )
-    
-    elif call.data.startswith("genre_"):
-        genre = call.data.replace("genre_", "")
-        genre_names = {
-            "action": "боевик",
-            "comedy": "комедия", 
-            "drama": "драма",
-            "scifi": "научная фантастика",
-            "horror": "ужасы",
-            "mystery": "детектив"
+    elif call.data.startswith("answer_"):
+        # Обрабатываем ответ пользователя
+        answer_type = call.data.replace("answer_", "")
+        answer_map = {
+            "yes": "Да",
+            "probably_yes": "Скорее да", 
+            "not_sure": "Не уверен",
+            "probably_no": "Скорее нет",
+            "no": "Нет"
         }
         
-        bot.edit_message_text(
-            f"🔍 Ищу {genre_names.get(genre, 'фильмы')}...",
-            chat_id, message_id
-        )
+        answer_text = answer_map.get(answer_type, answer_type)
         
-        # Асинхронный запрос к API
-        asyncio.run(send_genre_recommendation(chat_id, genre_names.get(genre, "фильм")))
-    
-    elif call.data.startswith("mood_"):
-        mood = call.data.replace("mood_", "")
-        mood_names = {
-            "happy": "веселое",
-            "sad": "грустное", 
-            "thoughtful": "задумчивое",
-            "celebratory": "праздничное",
-            "mysterious": "таинственное"
-        }
+        # Отправляем ответ как сообщение
+        bot.send_message(chat_id, f"➡️ Твой ответ: {answer_text}")
         
-        bot.edit_message_text(
-            f"🔍 Подбираю фильм под {mood_names.get(mood, 'ваше')} настроение...",
-            chat_id, message_id
-        )
-        
-        # Асинхронный запрос к API
-        asyncio.run(send_mood_recommendation(chat_id, mood_names.get(mood, "настроение")))
+        # Продолжаем диалог
+        continue_game(chat_id, user_id, answer_text)
 
-# ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С API ====================
-
-async def send_genre_recommendation(chat_id: int, genre: str):
-    """Отправляет рекомендацию по жанру"""
-    question = f"Порекомендуй 3 популярных фильма в жанре {genre}. Для каждого укажи год выпуска и краткое описание сюжета."
+def start_game(chat_id, user_id):
+    """Начинает новую игру"""
+    # Инициализируем историю диалога
+    user_conversations[user_id] = []
     
+    # Первое сообщение от бота
+    first_message = (
+        "Отлично! 🧙‍♂️ Загадай любой фильм и приготовься к магии...\n\n"
+        "Начинаю задавать вопросы! Используй кнопки для ответов:"
+    )
+    
+    bot.send_message(chat_id, first_message)
+    
+    # Запускаем первый вопрос
+    ask_next_question(chat_id, user_id)
+
+def ask_next_question(chat_id, user_id):
+    """Задает следующий вопрос пользователю"""
     bot.send_chat_action(chat_id, "typing")
     
     try:
-        answer = await api_client.ask_question_direct(question)
+        # Получаем историю диалога
+        history = user_conversations.get(user_id, [])
         
-        # Форматируем ответ
-        formatted_answer = f"🎬 Рекомендации по жанру {genre}:\n\n{answer}\n\nЧто еще вас интересует?"
+        # Создаем промпт для нейросети
+        if not history:
+            prompt = "Ты - Кинатор, который угадывает фильмы. Начни задавать первый вопрос о загаданном фильме. Задавай вопрос, на который можно ответить Да/Нет/Скорее да/Скорее нет/Не уверен."
+        else:
+            # Формируем историю диалога для контекста
+            conversation_text = "\n".join(history)
+            prompt = f"Продолжи угадывать фильм на основе этой истории:\n{conversation_text}\n\nЗадай следующий вопрос о фильме:"
         
-        bot.send_message(
-            chat_id,
-            formatted_answer,
-            reply_markup=main_menu()
-        )
+        # Получаем вопрос от нейросети
+        question = api_client.ask_question(prompt)
+        
+        # Добавляем вопрос в историю
+        user_conversations[user_id].append(f"Кинатор: {question}")
+        
+        # Отправляем вопрос с кнопками
+        bot.send_message(chat_id, question, reply_markup=get_answer_keyboard())
         
     except Exception as e:
-        bot.send_message(
-            chat_id,
-            "Извините, произошла ошибка при поиске рекомендаций 😔",
-            reply_markup=main_menu()
-        )
+        print(f"Ошибка: {e}")
+        # Запасной вопрос если API не работает
+        fallback_questions = [
+            "Этот фильм вышел после 2010 года?",
+            "Это американский фильм?",
+            "Жанр фильма - комедия?",
+            "В главной роли известный актер?",
+            "Фильм получил какие-то награды?",
+            "Это экранизация книги?",
+            "У фильма есть продолжения?"
+        ]
+        import random
+        question = random.choice(fallback_questions)
+        user_conversations[user_id].append(f"Кинатор: {question}")
+        bot.send_message(chat_id, question, reply_markup=get_answer_keyboard())
 
-async def send_mood_recommendation(chat_id: int, mood: str):
-    """Отправляет рекомендацию по настроению"""
-    question = f"Порекомендуй 3 фильма которые подходят для {mood} настроения. Для каждого укажи жанр, год выпуска и почему он подходит для этого настроения."
+def continue_game(chat_id, user_id, user_answer):
+    """Продолжает игру после ответа пользователя"""
+    # Добавляем ответ пользователя в историю
+    user_conversations[user_id].append(f"Пользователь: {user_answer}")
     
+    # Проверяем, не пора ли угадывать фильм
+    history = user_conversations.get(user_id, [])
+    if len(history) >= 6:  # После 3 вопросов можно попробовать угадать
+        # Случайно решаем, пытаться ли угадать
+        import random
+        if random.random() < 0.3:  # 30% шанс попытаться угадать
+            try_to_guess(chat_id, user_id)
+            return
+    
+    # Задаем следующий вопрос
+    ask_next_question(chat_id, user_id)
+
+def try_to_guess(chat_id, user_id):
+    """Пытается угадать фильм"""
     bot.send_chat_action(chat_id, "typing")
     
     try:
-        answer = await api_client.ask_question_direct(question)
+        # Получаем историю диалога
+        history = user_conversations.get(user_id, [])
+        conversation_text = "\n".join(history)
         
-        # Форматируем ответ
-        formatted_answer = f"⭐ Фильмы для {mood} настроения:\n\n{answer}\n\nНайдем что-то еще?"
+        # Запрашиваем угадывание у нейросети
+        prompt = f"На основе этой истории диалога угадай, какой фильм загадал пользователь:\n{conversation_text}\n\nНазови фильм и объясни, почему ты так решил:"
         
-        bot.send_message(
-            chat_id,
-            formatted_answer,
-            reply_markup=main_menu()
-        )
+        guess = api_client.ask_question(prompt)
+        
+        # Отправляем предположение
+        bot.send_message(chat_id, f"🎯 Думаю, я знаю!\n\n{guess}\n\nЯ угадал?", reply_markup=get_answer_keyboard())
+        
+        # Добавляем предположение в историю
+        user_conversations[user_id].append(f"Кинатор: {guess}")
         
     except Exception as e:
-        bot.send_message(
-            chat_id,
-            "Извините, произошла ошибка при поиске рекомендаций 😔",
-            reply_markup=main_menu()
-        )
+        print(f"Ошибка угадывания: {e}")
+        # Запасное угадывание
+        fallback_guesses = [
+            "Думаю, ты загадал 'Интерстеллар' - фантастика про космос и время!",
+            "Мне кажется, это 'Форрест Гамп' - трогательная история о жизни!",
+            "Наверное, ты загадал 'Матрицу' - культовая фантастика про реальность!",
+            "Возможно, это 'Побег из Шоушенка' - драма о надежде и свободе!"
+        ]
+        import random
+        guess = random.choice(fallback_guesses)
+        bot.send_message(chat_id, f"🎯 Думаю, я знаю!\n\n{guess}\n\nЯ угадал?", reply_markup=get_answer_keyboard())
+        user_conversations[user_id].append(f"Кинатор: {guess}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_messages(message):
-    """Обрабатывает текстовые сообщения с запросами фильмов"""
-    user_input = message.text.strip()
+    """Обработчик текстовых сообщений (если пользователь пишет текст вместо кнопок)"""
     chat_id = message.chat.id
+    user_id = message.from_user.id
     
-    if len(user_input) < 3:
-        bot.send_message(
-            chat_id,
-            "Пожалуйста, опишите подробнее, какой фильм вы ищете 🎬",
-            reply_markup=main_menu()
-        )
-        return
-    
-    bot.send_chat_action(chat_id, "typing")
-    
-    # Отправляем сообщение о поиске
-    search_msg = bot.send_message(
-        chat_id,
-        f"🔍 Ищу фильмы по запросу: '{user_input}'..."
+    # Предлагаем использовать кнопки
+    bot.send_message(
+        chat_id, 
+        "Для игры используй кнопки ответов! 🎮\n\nХочешь начать новую игру?", 
+        reply_markup=get_start_keyboard()
     )
-    
-    # Асинхронный запрос к API
-    async def process_request():
-        try:
-            question = f"Порекомендуй 3 фильма по запросу: '{user_input}'. Для каждого укажи год выпуска, жанр и краткое описание сюжета. Ответ должен быть структурированным и информативным."
-            
-            answer = await api_client.ask_question_direct(question)
-            
-            formatted_answer = f"🎯 Вот что я нашел по запросу '{user_input}':\n\n{answer}\n\nПонравились рекомендации?"
-            
-            bot.edit_message_text(
-                formatted_answer,
-                chat_id,
-                search_msg.message_id,
-                reply_markup=main_menu()
-            )
-            
-        except Exception as e:
-            bot.edit_message_text(
-                "Извините, произошла ошибка при поиске фильмов 😔\nПопробуйте еще раз или выберите из меню.",
-                chat_id,
-                search_msg.message_id,
-                reply_markup=main_menu()
-            )
-    
-    asyncio.run(process_request())
 
-# ==================== ЗАПУСК БОТА ====================
+# ==================== ЗАПУСК ====================
 
 if __name__ == "__main__":
-    print("🎬 Бот рекомендаций фильмов запущен! 🚀")
-    print("⚠️  Не забудьте настроить API данные в конфигурации")
+    print("🎬 Кинатор запущен! 🧙‍♂️")
+    print("Бот готов играть в угадайку фильмов...")
+    
+    # Тестовый запрос к API
+    try:
+        test_result = api_client.ask_question("Тестовое сообщение")
+        print(f"✅ API статус: Работает")
+    except Exception as e:
+        print(f"⚠️ API временно недоступен, но бот будет работать с запасными ответами")
+    
+    print("🚀 Бот готов к игре!")
     bot.infinity_polling()

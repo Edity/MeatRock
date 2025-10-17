@@ -1,7 +1,9 @@
-import telebot
+import telebot, os
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv
 
-BOT_TOKEN = "8220896552:AAFqZ28ylYmItLQLmQHOqTGWDCRtbSLwD5U"
+load_dotenv()
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(BOT_TOKEN)
 
 def main_menu():
